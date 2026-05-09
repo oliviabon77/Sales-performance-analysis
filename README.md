@@ -24,7 +24,7 @@ The pipeline expects three input files:
 - `sales_order_header.csv`
 - `sales_order_detail.csv`
 
-These files are not included in this repository unless they are public or safe to share.
+The data files are not included in this repository because they are not mine to share.
 
 ## Key Steps
 
@@ -39,11 +39,12 @@ The pipeline checks for:
 
 - Missing or malformed primary keys
 - Duplicate product IDs
-- Missing foreign key matches
+- Missing foreign key matches, orphaned records 
 - Invalid order or ship dates
 - Negative or zero revenue rows
 - Discounts greater than unit price
 - Potential join multiplication issues
+- Missing product classifications 
 
 ### 4. Clean and Enrich Product Data
 Missing product colors are filled with `N/A`. Missing product categories are inferred from product subcategories when possible, using business rules for Clothing, Accessories, and Components.
@@ -56,13 +57,13 @@ Order detail rows are joined with order header data. The project then calculates
 
 These fields support operational and revenue analysis.
 
-### 6. Generate Business Insights
+### 6. Generate Business Insights 
 The analysis identifies:
 
-- The top revenue-generating product color by year
-- Average business-day lead time by product category
+-Revenue appeared concentrated among a small subset of product colors and categories, suggesting opportunities for targeted inventory planning and merchansizing optimization. 
 
-## Example Findings
+
+## Findings 
 Based on the analysis in the notebook/script:
 
 - Red was the top revenue color in 2021.
@@ -72,7 +73,7 @@ Based on the analysis in the notebook/script:
 - A large number of rows still had unknown product category values, showing a realistic data quality limitation.
 
 ## Why This Project Matters
-This project demonstrates the type of work used in real analyst and operations roles: cleaning messy business data, validating data quality, creating reliable metrics, and translating raw tables into business insights.
+The transformed dataset supports data driven decision making around product preformance, fufilment efficency and revenue trends. 
 
 ## Repository Structure
 
@@ -84,11 +85,6 @@ sales-etl-sql-python/
 └── .gitignore
 ```
 
-## How to Run
-1. Open the script in Google Colab or a local Python environment.
-2. Upload the three required CSV files.
-3. Run the script from top to bottom.
-4. Review the printed data quality checks and final analysis outputs.
 
 ## Skills Demonstrated
 - ETL workflow development
