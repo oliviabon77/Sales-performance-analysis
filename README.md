@@ -1,97 +1,168 @@
-# Sales Data ETL Pipeline with Python
+# Sales Performance and Fulfillment Analysis
 
 ## Project Overview
-This project transforms raw sales data into clean, structured datasets for business reporting and analysis. The workflow uses Python and pandas to standardize data types, validate relationships between tables, clean missing values, calculate business metrics, and generate revenue and fulfillment insights.
 
-## Business Goal
-The goal of this project is to create reliable analytics-ready sales data from raw product, sales order header, and sales order detail files. The final outputs help answer questions such as:
+This project analyzes raw retail sales data and transforms it into clean, analytics-ready tables for business reporting. The goal is not only to clean the data, but also to generate insights that a business analyst could use to understand revenue performance, product trends, fulfillment speed, discount impact, and data quality risks.
 
-- Which product color generated the highest revenue each year?
-- Which product categories had the longest average fulfillment lead times?
-- Are there data quality issues such as missing product IDs, duplicate records, invalid dates, or suspicious revenue values?
+The workflow uses Python and Pandas to perform an end-to-end ETL process, validate key relationships, create business metrics, and produce summary tables that could support dashboards or executive reporting.
+
+## Business Problem
+
+A retail company needs reliable sales data to answer questions such as:
+
+- Which product categories are driving the most revenue?
+- Which product colors perform best year over year?
+- Are fulfillment lead times consistent across product categories?
+- How much do discounts affect net revenue?
+- Are there data quality issues that could reduce trust in reporting?
+
+Raw sales data often contains missing values, inconsistent data types, duplicate records, and incomplete product information. Before business leaders can make decisions from the data, the data must be cleaned, validated, and transformed into usable reporting tables.
 
 ## Tools Used
+
 - Python
-- pandas
+- Pandas
 - NumPy
-- Google Colab
-- CSV data files
+- CSV data sources
+- SQL-style joins and transformations
 
-## Data Sources
-The pipeline expects three input files:
+## Dataset Structure
 
-- `products.csv`
-- `sales_order_header.csv`
-- `sales_order_detail.csv`
+The analysis uses three raw tables:
 
-The data files are not included in this repository because they are not mine to share.
+| Table | Description |
+|---|---|
+| `products.csv` | Product master data including product IDs, colors, categories, and subcategories |
+| `sales_order_header.csv` | Order-level information including order dates, ship dates, freight, and salesperson IDs |
+| `sales_order_detail.csv` | Line-level order details including products, quantities, prices, and discounts |
 
-## Key Steps
+## Project Workflow
 
-### 1. Load Raw Data
-The project loads product, order header, and order detail datasets and reviews their shapes, column types, and missing values.
+### 1. Data Loading
 
-### 2. Standardize Data Types
-The script converts IDs, quantities, prices, discounts, freight costs, and dates into consistent formats so they can be used safely in joins and calculations.
+The raw product, sales header, and sales detail tables are loaded from the `data/` folder.
 
-### 3. Validate Data Quality
-The pipeline checks for:
+### 2. Data Type Standardization
 
-- Missing or malformed primary keys
-- Duplicate product IDs
-- Missing foreign key matches, orphaned records 
-- Invalid order or ship dates
-- Negative or zero revenue rows
-- Discounts greater than unit price
-- Potential join multiplication issues
-- Missing product classifications 
+Key fields are standardized so the data can be analyzed reliably:
 
-### 4. Clean and Enrich Product Data
-Missing product colors are filled with `N/A`. Missing product categories are inferred from product subcategories when possible, using business rules for Clothing, Accessories, and Components.
+- Product and order IDs are converted to numeric values
+- Quantity, price, discount, and freight fields are converted to numeric values
+- Order and ship dates are converted to datetime format
+- Partial dates formatted as `YYYY-MM` are standardized to `YYYY-MM-01`
 
-### 5. Build Analytics-Ready Order Table
-Order detail rows are joined with order header data. The project then calculates:
+### 3. Data Quality Validation
 
-- `LeadTimeInBusinessDays`
-- `TotalLineExtendedPrice`
+The project validates core fields and table relationships before analysis.
 
-These fields support operational and revenue analysis.
+Checks include:
 
-### 6. Generate Business Insights 
-The analysis identifies:
+- Missing or malformed product IDs
+- Missing or malformed sales order IDs
+- Missing or malformed order dates and ship dates
+- Primary key uniqueness
+- Foreign key relationships between order lines, order headers, and product records
+- Join integrity checks to make sure rows are not accidentally duplicated during merges
 
--Revenue appeared concentrated among a small subset of product colors and categories, suggesting opportunities for targeted inventory planning and merchansizing optimization. 
+### 4. Product Master Cleanup
 
+The product master table is cleaned and enriched by:
 
-## Findings 
-Based on the analysis in the notebook/script:
+- Replacing missing product colors with `N/A`
+- Inferring missing product categories from subcategory values
+- Labeling remaining unmapped categories as `Unknown`
+- Removing duplicate product IDs by keeping the most complete record
 
-- Red was the top revenue color in 2021.
-- Black was the top revenue color in 2022 and 2023.
-- Yellow was the top revenue color in 2024.
-- Average lead time was generally consistent across product categories, around 5 business days.
-- A large number of rows still had unknown product category values, showing a realistic data quality limitation.
+This step improves reporting quality because product category and color are important fields for sales analysis.
 
-## Why This Project Matters
-The transformed dataset supports data driven decision making around product preformance, fufilment efficency and revenue trends. 
+### 5. Publish Table Creation
 
-## Repository Structure
+The project creates cleaned reporting tables:
 
-```text
-sales-etl-sql-python/
-├── README.md
-├── sales_etl_sql_python.py
-├── requirements.txt
-└── .gitignore
-```
+| Output Table | Purpose |
+|---|---|
+| `publish_product.csv` | Cleaned product master table |
+| `publish_orders.csv` | Cleaned order-line table with sales and fulfillment metrics |
 
+Two key business metrics are created:
+
+| Metric | Definition | Business Use |
+|---|---|---|
+| `TotalLineExtendedPrice` | `OrderQty × (UnitPrice - UnitPriceDiscount)` | Measures net revenue after discounts |
+| `LeadTimeInBusinessDays` | Business days between order date and ship date | Measures fulfillment speed |
+
+## Business Questions Answered
+
+### 1. Which product colors generated the highest revenue each year?
+
+The analysis identifies the top revenue-generating product color for each year. This helps the business understand customer preferences and evaluate whether certain product attributes consistently drive sales.
+
+### 2. Which product categories generated the most revenue?
+
+Revenue is aggregated by product category to identify the strongest-performing product groups. This can support merchandising, inventory planning, and marketing decisions.
+
+### 3. Which product categories had the longest fulfillment times?
+
+Average, median, and maximum business-day lead times are calculated by category. This helps identify categories that may require operational review.
+
+### 4. How much did discounts affect revenue?
+
+The analysis calculates gross revenue before discounts, net revenue after discounts, total discount amount, and average discount rate. This helps evaluate whether discounting may be supporting demand or reducing revenue efficiency.
+
+### 5. What data quality issues could affect business reporting?
+
+The project summarizes data quality risks such as missing lead times, impossible ship dates, negative revenue, zero quantity rows, and discount values greater than unit price.
+
+## Key Business Insights
+
+- Annual revenue analysis identifies the strongest sales year, which can be used as a benchmark for understanding product mix, customer demand, and sales performance.
+- Category revenue analysis highlights which product groups contribute the largest share of revenue and may deserve priority in inventory and marketing decisions.
+- Product color analysis shows whether customer preference is stable over time or changes by year.
+- Lead time analysis connects sales data to operations by showing whether certain categories are slower to fulfill.
+- Discount impact analysis helps evaluate the tradeoff between sales volume and revenue reduction.
+- Data quality analysis shows where reporting reliability may be at risk and where better data governance is needed.
+
+## Business Recommendations
+
+Based on this analysis, the business could:
+
+1. Build a recurring dashboard to monitor revenue, units sold, lead time, discount impact, and data quality issues.
+2. Prioritize high-revenue categories for inventory planning and marketing review.
+3. Investigate product categories with longer fulfillment times to identify supplier, inventory, or shipping bottlenecks.
+4. Improve product master data governance so missing categories do not weaken reporting accuracy.
+5. Monitor discounting strategy to determine whether discounts are increasing profitable demand or reducing revenue per order line.
+6. Add customer, region, or sales channel data in a future version to support deeper segmentation.
+
+## Outputs
+
+The script exports the following CSV files to the `outputs/` folder:
+
+| File | Description |
+|---|---|
+| `publish_product.csv` | Cleaned product master table |
+| `publish_orders.csv` | Cleaned sales order table |
+| `annual_revenue_summary.csv` | Revenue, units sold, and year-over-year trends |
+| `category_revenue_summary.csv` | Revenue contribution by product category |
+| `revenue_by_year_color.csv` | Revenue by product color and year |
+| `top_color_by_year.csv` | Highest-revenue product color by year |
+| `lead_time_by_category.csv` | Fulfillment speed by product category |
+| `data_quality_summary.csv` | Data quality issue counts and rates |
+| `discount_impact_summary.csv` | Gross revenue, net revenue, and discount impact |
 
 ## Skills Demonstrated
-- ETL workflow development
+
 - Data cleaning
+- ETL pipeline design
 - Data validation
-- pandas transformations
-- Business metric creation
+- Business analysis
 - Revenue analysis
-- Operational lead time analysis
-- Technical documentation
+- Operational KPI analysis
+- Data quality assessment
+- Python programming
+- Pandas transformations
+- SQL-style joins
+- Business insight communication
+
+## Why This Project Matters
+
+This project demonstrates how a data analyst can move beyond simply cleaning data and use it to support real business decisions. The analysis connects technical work to business outcomes by showing how clean data can improve reporting accuracy, identify revenue drivers, surface operational bottlenecks, and guide future dashboard development.
