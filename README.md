@@ -103,9 +103,3 @@ Throughout this project, I worked with:
 
 This project helped me practice how technical data work connects to reporting, operations, and decision-making. In addition to cleaning and validating data, the analysis focused on identifying patterns that could influence reporting accuracy, fulfillment performance, and revenue analysis. The project also reinforced how operational and reporting decisions depend heavily on data quality and metric definition. Small issues such as inconsistent product categories, duplicate records, or incorrect date formatting can significantly change business reporting outputs and downstream analysis.
 
-# Dataset Note
-
-The datasets used in this project are not included in the repository because they were originally provided as part of a technical assessment process.
-
-To respect the original usage context, only the project code, workflow structure, and documentation are included here.
-
