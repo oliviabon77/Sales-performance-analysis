@@ -3,414 +3,812 @@
 Sales Performance and Fulfillment Analysis
 
 Objective:
-Transform raw retail sales data into a clean and reliable analytics dataset
-using Python and SQL-style ETL workflows. The project focuses on data quality,
-revenue analysis, and operational performance metrics.
+Transform raw retail sales data into clean analytics-ready tables and generate
+business insights related to revenue, product performance, fulfillment speed,
+and data quality.
 
-Key Analyses:
-- Product revenue trends by year
-- Fulfillment lead time analysis
-- Data quality validation checks
-- Product master standardization
+This project demonstrates:
+- ETL workflow design
+- Data type standardization
+- Primary and foreign key validation
+- Product master cleanup
+- Revenue and lead time metric creation
+- Business analyst-style insight generation
 
 Tools:
 - Python
 - Pandas
 - NumPy
-- SQL-style joins and transformations
 """
 
-# Sales Data ETL Pipeline (SQL + Python)
-
-## Objective
-#Transform raw sales data into a clean, structured dataset and analyze revenue trends using SQL and Python.
-
-## Tools
-#- Python (Pandas)
-# SQLite (SQL queries)
-#- Google Colab
-
-
-#Load the data and import packages 
 import pandas as pd
 import numpy as np
 
-products = pd.read_csv("data/products.csv")
-sales_order_header = pd.read_csv("data/sales_order_header.csv")
-sales_order_detail = pd.read_csv("data/sales_order_detail.csv")
 
-#Initail Data Review 
+# =========================================================
+# Data Loading
+# =========================================================
 
-print(products.shape)
-print(sales_order_header.shape)
-print(sales_order_detail.shape)
+def load_data(data_path="data"):
+    """Load raw sales and product datasets."""
+    products = pd.read_csv(f"{data_path}/products.csv")
+    sales_header = pd.read_csv(f"{data_path}/sales_order_header.csv")
+    sales_detail = pd.read_csv(f"{data_path}/sales_order_detail.csv")
 
-products.info()
-sales_order_header.info()
-sales_order_detail.info()
-
-print(products.isna().sum())
-print(sales_order_header.isna().sum())
-print(sales_order_detail.isna().sum())
-
-# Data Type standardization
-
-# Coerce keys/numerics so malformed values become NaN and get caught by checks
-products["ProductID"] = pd.to_numeric(products["ProductID"], errors="coerce")
-
-sales_order_header["SalesOrderID"] = pd.to_numeric(sales_order_header["SalesOrderID"], errors="coerce")
-
-sales_order_detail[["SalesOrderID", "SalesOrderDetailID", "ProductID"]] = (
-    sales_order_detail[["SalesOrderID", "SalesOrderDetailID", "ProductID"]]
-    .apply(pd.to_numeric, errors="coerce")
-)
-
-# Money/quantity -> numeric (used in revenue calculations)
-for col in ["OrderQty", "UnitPrice", "UnitPriceDiscount"]:
-    sales_order_detail[col] = pd.to_numeric(sales_order_detail[col], errors="coerce")
-
-sales_order_header["Freight"] = pd.to_numeric(sales_order_header["Freight"], errors="coerce")
-
-# SalesPersonID is an ID but has many nulls; use nullable Int64 to avoid 279.0 style floats (optional)
-sales_order_header["SalesPersonID"] = (
-    pd.to_numeric(sales_order_header["SalesPersonID"], errors="coerce")
-      .astype("Int64")
-)
+    return products, sales_header, sales_detail
 
 
-# Dates -> datetime
-# Handles YYYY-MM by assuming day=01 for BOTH OrderDate and ShipDate, assumption that could be questioned
+def review_raw_data(products, sales_header, sales_detail):
+    """Print basic dataset structure and missing value counts."""
+    print("\n--- Raw Data Shapes ---")
+    print("Products:", products.shape)
+    print("Sales Header:", sales_header.shape)
+    print("Sales Detail:", sales_detail.shape)
 
-def parse_date_series(s: pd.Series) -> pd.Series:
-    s = s.map(lambda x: "" if pd.isna(x) else str(x)).str.strip()
-    s = s.where(~s.str.fullmatch(r"\d{4}-\d{2}"), s + "-01")
-    return pd.to_datetime(s, format="%Y-%m-%d", errors="coerce")
+    print("\n--- Missing Values ---")
+    print("\nProducts:")
+    print(products.isna().sum())
 
-if sales_order_header["OrderDate"].dtype == "object":
-    sales_order_header["OrderDate"] = parse_date_series(sales_order_header["OrderDate"])
+    print("\nSales Header:")
+    print(sales_header.isna().sum())
 
-if sales_order_header["ShipDate"].dtype == "object":
-    sales_order_header["ShipDate"] = parse_date_series(sales_order_header["ShipDate"])
+    print("\nSales Detail:")
+    print(sales_detail.isna().sum())
 
 
-# Minimal sanity checks (interview-friendly)
+# =========================================================
+# Data Cleaning and Standardization
+# =========================================================
 
-print("Bad/missing ProductIDs in products:", int(products["ProductID"].isna().sum()))
-print("Bad/missing SalesOrderIDs in header:", int(sales_order_header["SalesOrderID"].isna().sum()))
-print("Bad/missing SalesOrderDetailIDs in detail:", int(sales_order_detail["SalesOrderDetailID"].isna().sum()))
-print("Bad/missing OrderDate:", int(sales_order_header["OrderDate"].isna().sum()))
-print("Bad/missing ShipDate:", int(sales_order_header["ShipDate"].isna().sum()))
+def parse_date_series(series):
+    """
+    Convert date fields to datetime.
 
-# Primary Keys
-print("Header PK unique:", sales_order_header["SalesOrderID"].is_unique)
-print("Detail PK unique:", sales_order_detail["SalesOrderDetailID"].is_unique)
-print("Product PK unique:", products["ProductID"].is_unique)
+    Partial dates formatted as YYYY-MM are standardized to YYYY-MM-01.
+    Invalid dates are converted to NaT so they can be flagged in validation.
+    """
+    cleaned = series.map(lambda x: "" if pd.isna(x) else str(x)).str.strip()
+    cleaned = cleaned.where(~cleaned.str.fullmatch(r"\d{4}-\d{2}"), cleaned + "-01")
+    return pd.to_datetime(cleaned, format="%Y-%m-%d", errors="coerce")
 
-# Foreign Keys
-missing_orders = ~sales_order_detail["SalesOrderID"].isin(sales_order_header["SalesOrderID"])
-missing_products = ~sales_order_detail["ProductID"].isin(products["ProductID"])
 
-print("Missing Order IDs:", missing_orders.sum())
-print("Missing Product IDs:", missing_products.sum())
+def standardize_data_types(products, sales_header, sales_detail):
+    """Standardize identifiers, numeric fields, and date fields."""
+    products = products.copy()
+    sales_header = sales_header.copy()
+    sales_detail = sales_detail.copy()
 
-#resolving duplicates in product master- kept the ones with the most information
-# Check duplicates
-# If duplicate ProductID rows exist, keep the row with the fewest nulls (transparent heuristic without an effective-date rule).
+    products["ProductID"] = pd.to_numeric(products["ProductID"], errors="coerce")
 
-dup_count = products["ProductID"].duplicated().sum()
-print("Duplicate ProductID rows:", int(dup_count))
-
-if dup_count > 0:
-    # Keep the row with the fewest nulls (remove row with less information)
-    products = (
-        products.assign(_nulls=products.isna().sum(axis=1))
-                .sort_values(["ProductID", "_nulls"])
-                .drop_duplicates("ProductID", keep="first")
-                .drop(columns="_nulls")
-                .copy()
+    sales_header["SalesOrderID"] = pd.to_numeric(
+        sales_header["SalesOrderID"],
+        errors="coerce"
     )
 
-print("Product PK unique after cleanup:", products["ProductID"].is_unique)
+    sales_detail[["SalesOrderID", "SalesOrderDetailID", "ProductID"]] = (
+        sales_detail[["SalesOrderID", "SalesOrderDetailID", "ProductID"]]
+        .apply(pd.to_numeric, errors="coerce")
+    )
 
-#Creating publish_product
-### Key Assumptions
-#Discount is an absolute amount (not %)
-#Lead time = business days, ShipDate exclusive
-#Unmapped categories labeled 'Unknown' to preserve volume
+    for col in ["OrderQty", "UnitPrice", "UnitPriceDiscount"]:
+        sales_detail[col] = pd.to_numeric(sales_detail[col], errors="coerce")
 
+    sales_header["Freight"] = pd.to_numeric(
+        sales_header["Freight"],
+        errors="coerce"
+    )
 
-publish_product = products.copy()
+    if "SalesPersonID" in sales_header.columns:
+        sales_header["SalesPersonID"] = (
+            pd.to_numeric(sales_header["SalesPersonID"], errors="coerce")
+            .astype("Int64")
+        )
 
-# 1) Replace NULL Color with N/A
-color_nulls_before = publish_product["Color"].isna().sum()
-publish_product["Color"] = publish_product["Color"].fillna("N/A")
-color_nulls_after = publish_product["Color"].isna().sum()
+    sales_header["OrderDate"] = parse_date_series(sales_header["OrderDate"])
+    sales_header["ShipDate"] = parse_date_series(sales_header["ShipDate"])
 
-# 2) Enhance ProductCategoryName when NULL using given rules
-cat_nulls_before = publish_product["ProductCategoryName"].isna().sum()
-
-sub = (
-    publish_product["ProductSubCategoryName"]
-    .fillna("")
-    .astype(str)
-    .str.strip()
-)
-
-# Clothing
-missing_cat = publish_product["ProductCategoryName"].isna()
-publish_product.loc[missing_cat & sub.isin(["Gloves","Shorts","Socks","Tights","Vests"]),
-                    "ProductCategoryName"] = "Clothing"
-
-# Accessories
-missing_cat = publish_product["ProductCategoryName"].isna()
-publish_product.loc[missing_cat & sub.isin(["Locks","Lights","Headsets","Helmets","Pedals","Pumps"]),
-                    "ProductCategoryName"] = "Accessories"
-
-# Components
-missing_cat = publish_product["ProductCategoryName"].isna()
-publish_product.loc[
-    missing_cat & (sub.str.contains("Frames", case=False, na=False) | sub.isin(["Wheels","Saddles"])),
-    "ProductCategoryName"
-] = "Components"
-
-# Bucket remaining NULL categories
-#publish_product["ProductCategoryName"] = publish_product["ProductCategoryName"].fillna("Unknown")
-cat_nulls_after = publish_product["ProductCategoryName"].isna().sum()
-
-print("Color NULLs before/after:", int(color_nulls_before), "to", int(color_nulls_after))
-print("Category NULLs before/after:", int(cat_nulls_before), "to", int(cat_nulls_after))
-print("Unknown category count:", int((publish_product["ProductCategoryName"] == "Unknown").sum())
-)
-
-#4
-#sales order transforms
+    return products, sales_header, sales_detail
 
 
+def clean_product_master(products):
+    """
+    Clean and enrich the product master table.
 
-# 1 Copy inputs (keep raw tables unchanged)
-hdr = sales_order_header.copy()
-dtl = sales_order_detail.copy()
+    Business rules:
+    - Missing Color values are labeled as "N/A".
+    - Missing ProductCategoryName values are inferred from ProductSubCategoryName.
+    - Remaining unmapped categories are labeled "Unknown" to preserve order volume.
+    - Duplicate ProductID rows are resolved by keeping the row with the fewest nulls.
+    """
+    publish_product = products.copy()
 
-# 2) Rename Freight to TotalOrderFreight
-hdr = hdr.rename(columns={"Freight": "TotalOrderFreight"})
+    duplicate_count = publish_product["ProductID"].duplicated().sum()
+    print("\nDuplicate ProductID rows before cleanup:", int(duplicate_count))
 
-# 3)column checks
-required_hdr = ["SalesOrderID", "OrderDate", "ShipDate", "TotalOrderFreight"]
-required_dtl = ["SalesOrderID", "SalesOrderDetailID", "ProductID", "OrderQty", "UnitPrice", "UnitPriceDiscount"]
+    if duplicate_count > 0:
+        publish_product = (
+            publish_product
+            .assign(_null_count=publish_product.isna().sum(axis=1))
+            .sort_values(["ProductID", "_null_count"])
+            .drop_duplicates("ProductID", keep="first")
+            .drop(columns="_null_count")
+            .copy()
+        )
 
-missing_hdr = [c for c in required_hdr if c not in hdr.columns]
-missing_dtl = [c for c in required_dtl if c not in dtl.columns]
-if missing_hdr:
-    raise KeyError(f"Missing header columns: {missing_hdr}")
-if missing_dtl:
-    raise KeyError(f"Missing detail columns: {missing_dtl}")
+    color_nulls_before = publish_product["Color"].isna().sum()
+    publish_product["Color"] = publish_product["Color"].fillna("N/A")
+    color_nulls_after = publish_product["Color"].isna().sum()
 
-# 4) Join detail to header must use a left join bc we want to keep all details
-publish_orders = dtl.merge(
-    hdr,
-    on="SalesOrderID",
-    how="left",
-    validate="many_to_one",
-    indicator=True
-)
+    category_nulls_before = publish_product["ProductCategoryName"].isna().sum()
 
-# 5 Check for unmatched header rows (true orphan lines)
-unmatched = int((publish_orders["_merge"] == "left_only").sum())
-print("Detail rows with no matching header:", unmatched)
-publish_orders = publish_orders.drop(columns="_merge")
+    subcategory = (
+        publish_product["ProductSubCategoryName"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
 
-# 6) Ensure numeric fields for calculations
-for col in ["OrderQty", "UnitPrice", "UnitPriceDiscount"]:
-    publish_orders[col] = pd.to_numeric(publish_orders[col], errors="coerce")
+    missing_category = publish_product["ProductCategoryName"].isna()
+    publish_product.loc[
+        missing_category & subcategory.isin(["Gloves", "Shorts", "Socks", "Tights", "Vests"]),
+        "ProductCategoryName"
+    ] = "Clothing"
 
-# 7) dates must be datetime for lead time, extra check
-if not np.issubdtype(publish_orders["OrderDate"].dtype, np.datetime64):
-    raise TypeError("OrderDate must be datetime64 (parse before lead time calc).")
-if not np.issubdtype(publish_orders["ShipDate"].dtype, np.datetime64):
-    raise TypeError("ShipDate must be datetime64 (parse before lead time calc).")
+    missing_category = publish_product["ProductCategoryName"].isna()
+    publish_product.loc[
+        missing_category & subcategory.isin(["Locks", "Lights", "Headsets", "Helmets", "Pedals", "Pumps"]),
+        "ProductCategoryName"
+    ] = "Accessories"
 
-# 8) LeadTimeInBusinessDays (Mon–Fri only and ShipDate exclusive, assumptions)
-publish_orders["LeadTimeInBusinessDays"] = pd.Series(pd.NA, index=publish_orders.index, dtype="Int64")
-mask = publish_orders["OrderDate"].notna() & publish_orders["ShipDate"].notna()
+    missing_category = publish_product["ProductCategoryName"].isna()
+    publish_product.loc[
+        missing_category & (
+            subcategory.str.contains("Frames", case=False, na=False)
+            | subcategory.isin(["Wheels", "Saddles"])
+        ),
+        "ProductCategoryName"
+    ] = "Components"
 
-order = publish_orders.loc[mask, "OrderDate"].values.astype("datetime64[D]")
-ship  = publish_orders.loc[mask, "ShipDate"].values.astype("datetime64[D]")
+    publish_product["ProductCategoryName"] = (
+        publish_product["ProductCategoryName"].fillna("Unknown")
+    )
 
-publish_orders.loc[mask, "LeadTimeInBusinessDays"] = np.busday_count(order, ship).astype("int64")
+    category_nulls_after = publish_product["ProductCategoryName"].isna().sum()
+    unknown_category_count = (
+        publish_product["ProductCategoryName"] == "Unknown"
+    ).sum()
 
-# 9) TotalLineExtendedPrice
-publish_orders["TotalLineExtendedPrice"] = (
-    publish_orders["OrderQty"] * (publish_orders["UnitPrice"] - publish_orders["UnitPriceDiscount"])
-)
+    print("\n--- Product Master Cleanup ---")
+    print("Product PK unique after cleanup:", publish_product["ProductID"].is_unique)
+    print("Color nulls before/after:", int(color_nulls_before), "to", int(color_nulls_after))
+    print("Category nulls before/after:", int(category_nulls_before), "to", int(category_nulls_after))
+    print("Unknown category count:", int(unknown_category_count))
 
-# 10)all detail fields + all header fields except SalesOrderID
-detail_cols = list(dtl.columns)
-header_cols = [c for c in hdr.columns if c != "SalesOrderID"]
-publish_orders = publish_orders[detail_cols + header_cols + ["LeadTimeInBusinessDays", "TotalLineExtendedPrice"]].copy()
+    return publish_product
 
-#quick prints
-print("publish_orders shape:", publish_orders.shape)
-print("Null lead time rows:", int(publish_orders["LeadTimeInBusinessDays"].isna().sum()))
-print("Negative revenue rows:", int((publish_orders["TotalLineExtendedPrice"] < 0).sum()))
 
-publish_orders.head()
+# =========================================================
+# Data Validation
+# =========================================================
 
-# data quality checks:
+def validate_primary_and_foreign_keys(products, sales_header, sales_detail):
+    """Validate primary keys and foreign key relationships."""
+    print("\n--- Primary Key Validation ---")
+    print("ProductID unique:", products["ProductID"].is_unique)
+    print("SalesOrderID unique:", sales_header["SalesOrderID"].is_unique)
+    print("SalesOrderDetailID unique:", sales_detail["SalesOrderDetailID"].is_unique)
 
-# 1) Orphan checks
-# 1a) Does every order line point to a real product?
-orph_prod = ~publish_orders["ProductID"].isin(publish_product["ProductID"])
-print(f"Order lines with missing product master: {int(orph_prod.sum())} ({orph_prod.mean()*100:.2f}%)")
+    missing_orders = ~sales_detail["SalesOrderID"].isin(sales_header["SalesOrderID"])
+    missing_products = ~sales_detail["ProductID"].isin(products["ProductID"])
 
-# 1b) Does every order line belong to a real order header?
-orph_order = ~sales_order_detail["SalesOrderID"].isin(sales_order_header["SalesOrderID"])
-print(f"Order lines with missing order header: {int(orph_order.sum())} ({orph_order.mean()*100:.2f}%)")
+    print("\n--- Foreign Key Validation ---")
+    print("Order lines with missing order header:", int(missing_orders.sum()))
+    print("Order lines with missing product master:", int(missing_products.sum()))
 
-# 2) Join explosion check: did the detail -> header join multiply rows?
-multiplied = len(publish_orders) != len(sales_order_detail)
-print(f"Row count detail: {len(sales_order_detail)} | publish_orders: {len(publish_orders)} | multiplied? {multiplied}")
+    return {
+        "missing_order_ids": int(missing_orders.sum()),
+        "missing_product_ids": int(missing_products.sum())
+    }
 
-# 3) Lead time checks
-# 3a) Did we calculate lead time for every row?
-null_lead = int(publish_orders["LeadTimeInBusinessDays"].isna().sum())
-print("Null lead time rows:", null_lead)
 
-# 3b) Are any dates impossible (ship before order)?
-bad_dates = publish_orders["ShipDate"] < publish_orders["OrderDate"]
-print(f"ShipDate before OrderDate rows: {int(bad_dates.sum())} ({bad_dates.mean()*100:.2f}%)")
+def validate_core_fields(products, sales_header, sales_detail):
+    """Check for missing or malformed critical fields."""
+    print("\n--- Core Field Validation ---")
+    print("Bad/missing ProductIDs:", int(products["ProductID"].isna().sum()))
+    print("Bad/missing SalesOrderIDs:", int(sales_header["SalesOrderID"].isna().sum()))
+    print("Bad/missing SalesOrderDetailIDs:", int(sales_detail["SalesOrderDetailID"].isna().sum()))
+    print("Bad/missing OrderDate:", int(sales_header["OrderDate"].isna().sum()))
+    print("Bad/missing ShipDate:", int(sales_header["ShipDate"].isna().sum()))
 
-# 3c) Are there extreme fulfillment delays? (simple outlier threshold)
-lt = publish_orders["LeadTimeInBusinessDays"]
-lt_outliers = lt.notna() & (lt > 60)
-print(f"Lead time > 60 business days: {int(lt_outliers.sum())} ({lt_outliers.mean()*100:.2f}%)")
 
-# 4) Pricing sanity checks (inputs to revenue)
-qty_zero = publish_orders["OrderQty"] == 0
-print(f"Zero quantity rows: {int(qty_zero.sum())} ({qty_zero.mean()*100:.2f}%)")
+# =========================================================
+# Publish Table Creation
+# =========================================================
 
-unitprice_neg = publish_orders["UnitPrice"] < 0
-print(f"Negative UnitPrice rows: {int(unitprice_neg.sum())} ({unitprice_neg.mean()*100:.2f}%)")
+def build_publish_orders(sales_header, sales_detail):
+    """
+    Build the cleaned order-level analytics table.
 
-discount_neg = publish_orders["UnitPriceDiscount"] < 0
-print(f"Negative UnitPriceDiscount rows: {int(discount_neg.sum())} ({discount_neg.mean()*100:.2f}%)")
+    Created metrics:
+    - LeadTimeInBusinessDays: business days between order and ship date
+    - TotalLineExtendedPrice: net revenue per order line after discount
+    """
+    sales_header = sales_header.copy()
+    sales_detail = sales_detail.copy()
 
-# 4a) Discount should not exceed UnitPrice
-disc_gt_price = publish_orders["UnitPriceDiscount"] > publish_orders["UnitPrice"]
-print(f"Discount > UnitPrice rows: {int(disc_gt_price.sum())} ({disc_gt_price.mean()*100:.2f}%)")
+    sales_header = sales_header.rename(columns={"Freight": "TotalOrderFreight"})
 
-# 5) Revenue checks (outputs)
-neg_revenue = publish_orders["TotalLineExtendedPrice"] < 0
-print(f"Negative revenue rows: {int(neg_revenue.sum())} ({neg_revenue.mean()*100:.2f}%)")
-
-zero_revenue = publish_orders["TotalLineExtendedPrice"] == 0
-print(f"Zero revenue rows: {int(zero_revenue.sum())} ({zero_revenue.mean()*100:.2f}%)")
-
-# 5a) Extra check: negative revenue with positive quantity is more suspicious than returns
-neg_not_return = neg_revenue & (publish_orders["OrderQty"] > 0)
-print(f"Negative revenue with positive quantity (more suspicious): {int(neg_not_return.sum())}")
-
-if int(neg_not_return.sum()) > 0:
-    display_cols = [
-        "SalesOrderID","SalesOrderDetailID","ProductID",
-        "OrderQty","UnitPrice","UnitPriceDiscount","TotalLineExtendedPrice"
+    required_header_cols = [
+        "SalesOrderID",
+        "OrderDate",
+        "ShipDate",
+        "TotalOrderFreight"
     ]
-    display(publish_orders.loc[neg_not_return, display_cols].head(10))
 
-# Top color by revenue each year
+    required_detail_cols = [
+        "SalesOrderID",
+        "SalesOrderDetailID",
+        "ProductID",
+        "OrderQty",
+        "UnitPrice",
+        "UnitPriceDiscount"
+    ]
 
-q1 = publish_orders.merge(
-    publish_product[["ProductID", "Color"]],
-    on="ProductID",
-    how="left",
-    validate="many_to_one"
-)
+    missing_header_cols = [col for col in required_header_cols if col not in sales_header.columns]
+    missing_detail_cols = [col for col in required_detail_cols if col not in sales_detail.columns]
 
-# Confirm product attributes joined correctly
-missing_color = q1["Color"].isna().sum()
-print("Orders with missing Color after join:", int(missing_color))
+    if missing_header_cols:
+        raise KeyError(f"Missing header columns: {missing_header_cols}")
 
-# Remove any rows without valid dates (none expected)
-q1 = q1.dropna(subset=["OrderDate"])
+    if missing_detail_cols:
+        raise KeyError(f"Missing detail columns: {missing_detail_cols}")
 
-q1["OrderYear"] = q1["OrderDate"].dt.year
+    publish_orders = sales_detail.merge(
+        sales_header,
+        on="SalesOrderID",
+        how="left",
+        validate="many_to_one",
+        indicator=True
+    )
 
-# Aggregate net revenue by year times colour
-revenue = (
-    q1.groupby(["OrderYear", "Color"], as_index=False)["TotalLineExtendedPrice"]
-      .sum()
-)
+    unmatched_headers = int((publish_orders["_merge"] == "left_only").sum())
+    print("\nDetail rows with no matching header:", unmatched_headers)
 
-#keep colors that tie for the max
-max_per_year = (
-    revenue.groupby("OrderYear", as_index=False)["TotalLineExtendedPrice"]
-           .max()
-           .rename(columns={"TotalLineExtendedPrice": "MaxRevenue"})
-)
+    publish_orders = publish_orders.drop(columns="_merge")
 
-top_color = (
-    revenue
-    .merge(max_per_year, on="OrderYear")
-    .query("TotalLineExtendedPrice == MaxRevenue")
-    .drop(columns="MaxRevenue")
-    .sort_values(["OrderYear", "Color"])
-    .reset_index(drop=True)
-)
+    if not np.issubdtype(publish_orders["OrderDate"].dtype, np.datetime64):
+        raise TypeError("OrderDate must be datetime64 before calculating lead time.")
 
-top_color
+    if not np.issubdtype(publish_orders["ShipDate"].dtype, np.datetime64):
+        raise TypeError("ShipDate must be datetime64 before calculating lead time.")
 
-"""For each year, I aggregated net revenue by color using TotalLineExtendedPrice, which includes returns and credits to reflect true financial impact. I then selected the highest revenue color per year.
-In 2021 the top colour was red, in 2022 and 2023 it was black and in 2024 it was yellow.
-To ensure the result is deterministic and reproducible, I added a tie-breaker so that if two colors generated the exact same revenue in a year, the color that comes first alphabetically would be chosen. This avoids random selection that could change depending on sort order or platform. In practice, no exact ties occurred in this dataset, but the rule guarantees consistent results if they did.
-"""
+    publish_orders["LeadTimeInBusinessDays"] = pd.Series(
+        pd.NA,
+        index=publish_orders.index,
+        dtype="Int64"
+    )
 
-#Average LeadTimeInBusinessDays by ProductCategoryName
+    valid_date_mask = (
+        publish_orders["OrderDate"].notna()
+        & publish_orders["ShipDate"].notna()
+    )
 
-# Join order lines to the product master so each row gets a category.
-# This is a many to one relationship because many order lines map to one product.
-q2 = publish_orders.merge(
-    publish_product[["ProductID", "ProductCategoryName"]],
-    on="ProductID",
-    how="left",
-    validate="many_to_one"
-)
+    order_dates = publish_orders.loc[valid_date_mask, "OrderDate"].values.astype("datetime64[D]")
+    ship_dates = publish_orders.loc[valid_date_mask, "ShipDate"].values.astype("datetime64[D]")
 
-# Check how many order lines did not find a matching category.
-# This helps confirm the quality of the product master and join.
-missing_before = q2["ProductCategoryName"].isna().sum()
-print("Rows with missing category after join (before):", int(missing_before))
+    publish_orders.loc[valid_date_mask, "LeadTimeInBusinessDays"] = (
+        np.busday_count(order_dates, ship_dates).astype("int64")
+    )
 
-missing_after = q2["ProductCategoryName"].isna().sum()
-print("Rows with missing category after:", int(missing_after))
+    publish_orders["TotalLineExtendedPrice"] = (
+        publish_orders["OrderQty"]
+        * (publish_orders["UnitPrice"] - publish_orders["UnitPriceDiscount"])
+    )
 
-# Aggregate to compute the average business-day lead time by category.
-# - mean() gives the KPI requested
-# - count() shows how many rows contributed to the mean
-# - size() shows total line volume per category for context
-avg_lead = (
-    q2.groupby("ProductCategoryName", as_index=False)
-      .agg(
-          AvgLeadTimeInBusinessDays=("LeadTimeInBusinessDays", "mean"),
-          LinesWithLeadTime=("LeadTimeInBusinessDays", "count"),
-          LineCount=("ProductID", "size")
-      )
-      # Sort so categories with the longest lead times appear first
-      .sort_values("AvgLeadTimeInBusinessDays", ascending=False)
-      .reset_index(drop=True)
-)
+    detail_cols = list(sales_detail.columns)
+    header_cols = [col for col in sales_header.columns if col != "SalesOrderID"]
 
-# Final result used to answer Analysis Question 2
-avg_lead
+    publish_orders = publish_orders[
+        detail_cols
+        + header_cols
+        + ["LeadTimeInBusinessDays", "TotalLineExtendedPrice"]
+    ].copy()
 
-bad_products = publish_product[publish_product["ProductCategoryName"].isna()]["ProductID"]
-publish_orders[publish_orders["ProductID"].isin(bad_products)].shape
+    print("\n--- Publish Orders Summary ---")
+    print("publish_orders shape:", publish_orders.shape)
+    print("Null lead time rows:", int(publish_orders["LeadTimeInBusinessDays"].isna().sum()))
+    print("Negative revenue rows:", int((publish_orders["TotalLineExtendedPrice"] < 0).sum()))
 
-"""Average LeadTimeInBusinessDays is very consistent across categories around 5 days. The lowest average is Components and the highest is Unknown, with 37,653 order lines falling into Unknown because ProductCategoryName was missing even after applying the provided enhancement rules.
+    return publish_orders
 
-Summary:
-This case study focused on transforming raw product and sales order data into a reliable analytics dataset to support business decision making. The three source tables, Product Master, SalesOrderHeader, and SalesOrderDetail, were loaded, reviewed, and standardized with appropriate data types for dates, prices, and identifiers. Primary and foreign key relationships were validated to ensure order lines correctly referenced existing orders and products, creating a trustworthy foundation for reporting and analysis.
 
-The product master was then cleaned and enriched to improve data quality and usability. Missing values in the Color field were replaced with N/A, and missing ProductCategoryName values were inferred using business rules based on ProductSubCategoryName. This ensured that all products could be grouped into meaningful categories such as Clothing, Accessories, and Components, allowing for consistent aggregation across the business. The sales data was joined and enhanced with two key metrics, LeadTimeInBusinessDays to measure fulfillment speed excluding weekends, and TotalLineExtendedPrice to represent net revenue per order line after discounts.
+def run_data_quality_checks(publish_orders, publish_product, sales_header, sales_detail):
+    """Run quality checks on the final analytics table."""
+    print("\n--- Data Quality Checks ---")
 
-Using the transformed dataset, two core insights were produced. The analysis identified which product color generated the highest revenue in each year, providing visibility into customer preferences and potential merchandising opportunities. It also evaluated average lead time by product category, highlighting operational differences that can inform inventory planning and service level improvements. Overall, the process delivered a clean, integrated data model that supports both commercial and operational decision making with accurate and actionable metrics.
-"""
+    orphan_products = ~publish_orders["ProductID"].isin(publish_product["ProductID"])
+    orphan_orders = ~sales_detail["SalesOrderID"].isin(sales_header["SalesOrderID"])
 
+    print(
+        f"Order lines with missing product master: "
+        f"{int(orphan_products.sum())} ({orphan_products.mean() * 100:.2f}%)"
+    )
+
+    print(
+        f"Order lines with missing order header: "
+        f"{int(orphan_orders.sum())} ({orphan_orders.mean() * 100:.2f}%)"
+    )
+
+    row_count_changed = len(publish_orders) != len(sales_detail)
+
+    print(
+        f"Row count detail: {len(sales_detail)} | "
+        f"publish_orders: {len(publish_orders)} | "
+        f"multiplied? {row_count_changed}"
+    )
+
+    null_lead_time = publish_orders["LeadTimeInBusinessDays"].isna()
+    ship_before_order = publish_orders["ShipDate"] < publish_orders["OrderDate"]
+    long_lead_time = publish_orders["LeadTimeInBusinessDays"] > 60
+
+    zero_quantity = publish_orders["OrderQty"] == 0
+    negative_unit_price = publish_orders["UnitPrice"] < 0
+    negative_discount = publish_orders["UnitPriceDiscount"] < 0
+    discount_exceeds_price = publish_orders["UnitPriceDiscount"] > publish_orders["UnitPrice"]
+
+    negative_revenue = publish_orders["TotalLineExtendedPrice"] < 0
+    zero_revenue = publish_orders["TotalLineExtendedPrice"] == 0
+    negative_revenue_positive_quantity = negative_revenue & (publish_orders["OrderQty"] > 0)
+
+    quality_summary = pd.DataFrame({
+        "Check": [
+            "Null lead time",
+            "Ship date before order date",
+            "Lead time greater than 60 business days",
+            "Zero quantity",
+            "Negative unit price",
+            "Negative discount",
+            "Discount greater than unit price",
+            "Negative revenue",
+            "Zero revenue",
+            "Negative revenue with positive quantity"
+        ],
+        "IssueCount": [
+            int(null_lead_time.sum()),
+            int(ship_before_order.sum()),
+            int(long_lead_time.sum()),
+            int(zero_quantity.sum()),
+            int(negative_unit_price.sum()),
+            int(negative_discount.sum()),
+            int(discount_exceeds_price.sum()),
+            int(negative_revenue.sum()),
+            int(zero_revenue.sum()),
+            int(negative_revenue_positive_quantity.sum())
+        ],
+        "IssueRate": [
+            null_lead_time.mean(),
+            ship_before_order.mean(),
+            long_lead_time.mean(),
+            zero_quantity.mean(),
+            negative_unit_price.mean(),
+            negative_discount.mean(),
+            discount_exceeds_price.mean(),
+            negative_revenue.mean(),
+            zero_revenue.mean(),
+            negative_revenue_positive_quantity.mean()
+        ]
+    })
+
+    print("\nQuality Summary:")
+    print(quality_summary)
+
+    return quality_summary
+
+
+# =========================================================
+# Business Analysis
+# =========================================================
+
+def analyze_top_color_by_year(publish_orders, publish_product):
+    """Identify the highest-revenue product color for each order year."""
+    color_analysis = publish_orders.merge(
+        publish_product[["ProductID", "Color"]],
+        on="ProductID",
+        how="left",
+        validate="many_to_one"
+    )
+
+    missing_color_count = color_analysis["Color"].isna().sum()
+    print("\nOrders with missing color after product join:", int(missing_color_count))
+
+    color_analysis = color_analysis.dropna(subset=["OrderDate"])
+    color_analysis["OrderYear"] = color_analysis["OrderDate"].dt.year
+
+    revenue_by_year_color = (
+        color_analysis
+        .groupby(["OrderYear", "Color"], as_index=False)
+        .agg(
+            TotalRevenue=("TotalLineExtendedPrice", "sum"),
+            OrderLines=("SalesOrderDetailID", "count"),
+            UnitsSold=("OrderQty", "sum")
+        )
+    )
+
+    max_revenue_by_year = (
+        revenue_by_year_color
+        .groupby("OrderYear", as_index=False)["TotalRevenue"]
+        .max()
+        .rename(columns={"TotalRevenue": "MaxRevenue"})
+    )
+
+    top_color_by_year = (
+        revenue_by_year_color
+        .merge(max_revenue_by_year, on="OrderYear")
+        .query("TotalRevenue == MaxRevenue")
+        .drop(columns="MaxRevenue")
+        .sort_values(["OrderYear", "Color"])
+        .reset_index(drop=True)
+    )
+
+    print("\n--- Top Color by Revenue Each Year ---")
+    print(top_color_by_year)
+
+    return revenue_by_year_color, top_color_by_year
+
+
+def analyze_lead_time_by_category(publish_orders, publish_product):
+    """Calculate fulfillment speed by product category."""
+    category_analysis = publish_orders.merge(
+        publish_product[["ProductID", "ProductCategoryName"]],
+        on="ProductID",
+        how="left",
+        validate="many_to_one"
+    )
+
+    missing_category_count = category_analysis["ProductCategoryName"].isna().sum()
+    print("\nRows with missing category after product join:", int(missing_category_count))
+
+    category_analysis["ProductCategoryName"] = (
+        category_analysis["ProductCategoryName"].fillna("Unknown")
+    )
+
+    lead_time_by_category = (
+        category_analysis
+        .groupby("ProductCategoryName", as_index=False)
+        .agg(
+            AvgLeadTimeInBusinessDays=("LeadTimeInBusinessDays", "mean"),
+            MedianLeadTimeInBusinessDays=("LeadTimeInBusinessDays", "median"),
+            MaxLeadTimeInBusinessDays=("LeadTimeInBusinessDays", "max"),
+            LinesWithLeadTime=("LeadTimeInBusinessDays", "count"),
+            TotalOrderLines=("ProductID", "size")
+        )
+        .sort_values("AvgLeadTimeInBusinessDays", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    print("\n--- Lead Time by Product Category ---")
+    print(lead_time_by_category)
+
+    return lead_time_by_category
+
+
+def analyze_annual_revenue(publish_orders):
+    """Analyze annual revenue, order volume, units sold, and average order-line value."""
+    annual_revenue = publish_orders.dropna(subset=["OrderDate"]).copy()
+    annual_revenue["OrderYear"] = annual_revenue["OrderDate"].dt.year
+
+    annual_summary = (
+        annual_revenue
+        .groupby("OrderYear", as_index=False)
+        .agg(
+            TotalRevenue=("TotalLineExtendedPrice", "sum"),
+            OrderLines=("SalesOrderDetailID", "count"),
+            UnitsSold=("OrderQty", "sum"),
+            AvgLineValue=("TotalLineExtendedPrice", "mean")
+        )
+        .sort_values("OrderYear")
+        .reset_index(drop=True)
+    )
+
+    annual_summary["RevenueYoYChange"] = annual_summary["TotalRevenue"].pct_change()
+    annual_summary["UnitYoYChange"] = annual_summary["UnitsSold"].pct_change()
+
+    print("\n--- Annual Revenue Summary ---")
+    print(annual_summary)
+
+    return annual_summary
+
+
+def analyze_category_revenue(publish_orders, publish_product):
+    """Analyze revenue contribution by product category."""
+    category_revenue = publish_orders.merge(
+        publish_product[["ProductID", "ProductCategoryName"]],
+        on="ProductID",
+        how="left",
+        validate="many_to_one"
+    )
+
+    category_revenue["ProductCategoryName"] = (
+        category_revenue["ProductCategoryName"].fillna("Unknown")
+    )
+
+    category_summary = (
+        category_revenue
+        .groupby("ProductCategoryName", as_index=False)
+        .agg(
+            TotalRevenue=("TotalLineExtendedPrice", "sum"),
+            OrderLines=("SalesOrderDetailID", "count"),
+            UnitsSold=("OrderQty", "sum"),
+            AvgLineValue=("TotalLineExtendedPrice", "mean")
+        )
+        .sort_values("TotalRevenue", ascending=False)
+        .reset_index(drop=True)
+    )
+
+    total_revenue = category_summary["TotalRevenue"].sum()
+    category_summary["RevenueShare"] = category_summary["TotalRevenue"] / total_revenue
+
+    print("\n--- Category Revenue Summary ---")
+    print(category_summary)
+
+    return category_summary
+
+
+def analyze_discount_impact(publish_orders):
+    """Analyze discounting behavior and its revenue impact."""
+    discount_analysis = publish_orders.copy()
+
+    discount_analysis["GrossLineRevenue"] = (
+        discount_analysis["OrderQty"] * discount_analysis["UnitPrice"]
+    )
+
+    discount_analysis["DiscountAmount"] = (
+        discount_analysis["OrderQty"] * discount_analysis["UnitPriceDiscount"]
+    )
+
+    discount_analysis["DiscountRate"] = np.where(
+        discount_analysis["GrossLineRevenue"] != 0,
+        discount_analysis["DiscountAmount"] / discount_analysis["GrossLineRevenue"],
+        np.nan
+    )
+
+    summary = pd.DataFrame({
+        "Metric": [
+            "Gross revenue before discounts",
+            "Net revenue after discounts",
+            "Total discount amount",
+            "Average discount rate",
+            "Discounted order-line count"
+        ],
+        "Value": [
+            discount_analysis["GrossLineRevenue"].sum(),
+            discount_analysis["TotalLineExtendedPrice"].sum(),
+            discount_analysis["DiscountAmount"].sum(),
+            discount_analysis["DiscountRate"].mean(),
+            int((discount_analysis["UnitPriceDiscount"] > 0).sum())
+        ]
+    })
+
+    print("\n--- Discount Impact Summary ---")
+    print(summary)
+
+    return summary
+
+
+# =========================================================
+# Business Insight Generation
+# =========================================================
+
+def generate_business_insights(
+    annual_summary,
+    category_summary,
+    top_color_by_year,
+    lead_time_by_category,
+    quality_summary,
+    discount_summary
+):
+    """Generate written business insights from the analysis outputs."""
+    insights = []
+
+    top_revenue_year = annual_summary.loc[
+        annual_summary["TotalRevenue"].idxmax()
+    ]
+
+    top_category = category_summary.loc[
+        category_summary["TotalRevenue"].idxmax()
+    ]
+
+    slowest_category = lead_time_by_category.loc[
+        lead_time_by_category["AvgLeadTimeInBusinessDays"].idxmax()
+    ]
+
+    largest_quality_issue = quality_summary.sort_values(
+        "IssueCount",
+        ascending=False
+    ).iloc[0]
+
+    insights.append(
+        f"Annual revenue peaked in {int(top_revenue_year['OrderYear'])}, "
+        f"with total revenue of ${top_revenue_year['TotalRevenue']:,.2f}. "
+        f"This year should be reviewed as a benchmark for sales performance, "
+        f"product mix, and customer demand."
+    )
+
+    insights.append(
+        f"{top_category['ProductCategoryName']} generated the highest category revenue "
+        f"at ${top_category['TotalRevenue']:,.2f}, representing "
+        f"{top_category['RevenueShare'] * 100:.1f}% of total revenue. "
+        f"This category appears to be a major revenue driver and may deserve priority "
+        f"in inventory planning, merchandising, and marketing analysis."
+    )
+
+    insights.append(
+        f"The slowest fulfillment category was {slowest_category['ProductCategoryName']}, "
+        f"with an average lead time of "
+        f"{slowest_category['AvgLeadTimeInBusinessDays']:.2f} business days. "
+        f"If this category also contributes meaningful revenue or order volume, "
+        f"it may be a good candidate for operational review."
+    )
+
+    insights.append(
+        f"The largest data quality issue was '{largest_quality_issue['Check']}', "
+        f"affecting {int(largest_quality_issue['IssueCount'])} rows. "
+        f"This matters because unresolved data quality issues can distort reporting, "
+        f"reduce trust in dashboards, and lead to poor business decisions."
+    )
+
+    discount_amount = discount_summary.loc[
+        discount_summary["Metric"] == "Total discount amount",
+        "Value"
+    ].iloc[0]
+
+    insights.append(
+        f"Total discount impact was ${discount_amount:,.2f}. "
+        f"Discounting should be monitored because it can increase sales volume while "
+        f"also reducing margin. A next-step analysis should compare discount rates "
+        f"against units sold and revenue growth."
+    )
+
+    if not top_color_by_year.empty:
+        repeated_colors = top_color_by_year["Color"].value_counts()
+        most_common_top_color = repeated_colors.idxmax()
+        top_color_years = repeated_colors.max()
+
+        insights.append(
+            f"{most_common_top_color} was the top revenue-generating color in "
+            f"{top_color_years} year(s). Repeated color-level performance may indicate "
+            f"stable customer preference and could inform product assortment decisions."
+        )
+
+    print("\n--- Business Insights ---")
+    for i, insight in enumerate(insights, start=1):
+        print(f"{i}. {insight}")
+
+    return insights
+
+
+def generate_recommendations():
+    """Provide business analyst-style recommendations based on the project."""
+    recommendations = [
+        "Build a recurring dashboard to track revenue, units sold, lead time, and data quality issues by month.",
+        "Investigate high-revenue product categories to understand whether performance is driven by volume, pricing, or product mix.",
+        "Review categories with longer fulfillment times to identify possible inventory, supplier, or shipping bottlenecks.",
+        "Improve product master data governance so missing categories do not weaken reporting accuracy.",
+        "Monitor discounting strategy to determine whether discounts are increasing profitable demand or simply reducing revenue per order line.",
+        "Add customer, region, or channel data in a future version to support deeper segmentation and sales strategy decisions."
+    ]
+
+    print("\n--- Recommendations ---")
+    for i, recommendation in enumerate(recommendations, start=1):
+        print(f"{i}. {recommendation}")
+
+    return recommendations
+
+
+# =========================================================
+# Export Outputs
+# =========================================================
+
+def export_outputs(
+    publish_product,
+    publish_orders,
+    annual_summary,
+    category_summary,
+    revenue_by_year_color,
+    top_color_by_year,
+    lead_time_by_category,
+    quality_summary,
+    discount_summary,
+    output_path="outputs"
+):
+    """Export cleaned tables and analysis outputs as CSV files."""
+    import os
+
+    os.makedirs(output_path, exist_ok=True)
+
+    publish_product.to_csv(f"{output_path}/publish_product.csv", index=False)
+    publish_orders.to_csv(f"{output_path}/publish_orders.csv", index=False)
+    annual_summary.to_csv(f"{output_path}/annual_revenue_summary.csv", index=False)
+    category_summary.to_csv(f"{output_path}/category_revenue_summary.csv", index=False)
+    revenue_by_year_color.to_csv(f"{output_path}/revenue_by_year_color.csv", index=False)
+    top_color_by_year.to_csv(f"{output_path}/top_color_by_year.csv", index=False)
+    lead_time_by_category.to_csv(f"{output_path}/lead_time_by_category.csv", index=False)
+    quality_summary.to_csv(f"{output_path}/data_quality_summary.csv", index=False)
+    discount_summary.to_csv(f"{output_path}/discount_impact_summary.csv", index=False)
+
+    print(f"\nOutputs exported to the '{output_path}' folder.")
+
+
+# =========================================================
+# Main Pipeline
+# =========================================================
+
+def main():
+    products, sales_header, sales_detail = load_data()
+
+    review_raw_data(products, sales_header, sales_detail)
+
+    products, sales_header, sales_detail = standardize_data_types(
+        products,
+        sales_header,
+        sales_detail
+    )
+
+    validate_core_fields(products, sales_header, sales_detail)
+    validate_primary_and_foreign_keys(products, sales_header, sales_detail)
+
+    publish_product = clean_product_master(products)
+    publish_orders = build_publish_orders(sales_header, sales_detail)
+
+    quality_summary = run_data_quality_checks(
+        publish_orders,
+        publish_product,
+        sales_header,
+        sales_detail
+    )
+
+    annual_summary = analyze_annual_revenue(publish_orders)
+
+    category_summary = analyze_category_revenue(
+        publish_orders,
+        publish_product
+    )
+
+    revenue_by_year_color, top_color_by_year = analyze_top_color_by_year(
+        publish_orders,
+        publish_product
+    )
+
+    lead_time_by_category = analyze_lead_time_by_category(
+        publish_orders,
+        publish_product
+    )
+
+    discount_summary = analyze_discount_impact(publish_orders)
+
+    generate_business_insights(
+        annual_summary,
+        category_summary,
+        top_color_by_year,
+        lead_time_by_category,
+        quality_summary,
+        discount_summary
+    )
+
+    generate_recommendations()
+
+    export_outputs(
+        publish_product,
+        publish_orders,
+        annual_summary,
+        category_summary,
+        revenue_by_year_color,
+        top_color_by_year,
+        lead_time_by_category,
+        quality_summary,
+        discount_summary
+    )
+
+
+if __name__ == "__main__":
+    main()
